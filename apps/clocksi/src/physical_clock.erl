@@ -6,7 +6,7 @@
 -export([get_snapshot_time/1,
          get_commit_client_clock/1,
          get_prepare_time/1,
-         wait_until_safe/1,
+         wait_until_safe/2,
          compare_g/2,
          compare_ge/2]).
 
@@ -27,7 +27,7 @@ get_prepare_time(SD0) ->
 
 wait_until_safe(Threshold, SD0) ->
     Now = now_milisec(erlang:now()),
-    case Threshold => Now of
+    case Threshold >= Now of
         true ->
             Diff = Threshold - Now,
             timer:sleep(Diff + 1),
@@ -37,7 +37,7 @@ wait_until_safe(Threshold, SD0) ->
     end.
 
 compare_g(Time1, Time2) ->
-    Time1 > Time2, S0.
+    Time1 > Time2.
 
 compare_ge(Time1, Time2) ->
-    Time1 => Time2.
+    Time1 >= Time2.

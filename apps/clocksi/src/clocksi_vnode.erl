@@ -25,7 +25,6 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -export([start_vnode/1,
-         register_hung_fsm/2,
          read_data_item/3,
          prepare/4,
          local_commit/5,
@@ -69,7 +68,7 @@ prepare(Node, Keys, TxId, SnapshotTime) ->
                                    ?CLOCKSI_MASTER).
 
 %% @doc Sends a local_commit request to a Node involved in a tx identified by TxId
-commit(Node, Updates, TxId, SnapshotTime, Client) ->
+local_commit(Node, Updates, TxId, SnapshotTime, Client) ->
     riak_core_vnode_master:command(Node,
                                    {local_commit, Updates, TxId, SnapshotTime, Client},
                                    {fsm, undefined, self()},
@@ -118,7 +117,7 @@ init([Partition]) ->
     CommittedKey = ets:new(list_to_atom(atom_to_list(committed_key) ++
                                           integer_to_list(Partition)),
                           [set]),
-    CommittedWriteSet = ets:new(list_to_atom(atom_to_list(committed_write_set) ++
+    CommittedWriteSet = ets:new(list_to_atom(atom_to_list(committed_write_set)
                                            ++ integer_to_list(Partition)),
                                 [ordered_set]),
 
@@ -146,7 +145,7 @@ handle_command({read_data_item, Key, SnapshotTime}, Sender, SD0=#vnode_state{clo
                                                                              n_to_read=NToRead}) ->
     ReqId = clocksi:mk_reqid(),
     SD = Clocks:wait_until_safe(SnapshotTime, SD0),
-    [{Key, Orddict0}] = ets:lookup(PreparedKeys, Key),
+    [{Key, Orddict0}] = ets:lookup(PreparedKey, Key),
     case get_txs_to_wait_for(SnapshotTime, Orddict0, Clocks) of
         [] ->
             {Reply, SD1} = Backend:get(Key, SnapshotTime, SD),
@@ -156,23 +155,22 @@ handle_command({read_data_item, Key, SnapshotTime}, Sender, SD0=#vnode_state{clo
                             true = ets:insert(PendingReads, {TxId, {ReqId, Key, SnapshotTime, Sender}})
                           end, ListTxs),
             true = ets:insert(NToRead, {ReqId, length(ListTxs)}),
-            {noreply, State}
+            {noreply, SD}
     end;
 
 
-handle_command({prepare, Keys, TxId, SnapshotTime}, Sender, SD0) ->
+handle_command({prepare, Keys, TxId, SnapshotTime}, Sender, SD0=#vnode_state{clocks=Clocks}) ->
     SD = Clocks:wait_until_safe(SnapshotTime, SD0),
-    do_prepare(Keys, TxId, SnapshotTime, Sender, SD0);
+    do_prepare(Keys, TxId, SnapshotTime, Sender, SD);
     
-handle_command({local_commit, Updates, TxId, SnapshotTime, Client}, _Sender, SD0) ->
+handle_command({local_commit, Updates, TxId, SnapshotTime, Client}, _Sender, SD0=#vnode_state{clocks=Clocks}) ->
     SD = Clocks:wait_until_safe(SnapshotTime, SD0),
-    localcommit(Updates, TxId, SnapshotTime, Client, SD);
+    do_localcommit(Updates, TxId, SnapshotTime, Client, SD);
 
 handle_command({commit, Updates, TxId, CommitTime}, _Sender, SD0) ->
     do_commit(Updates, TxId, CommitTime, SD0);
 
-
-handle_command({abort, TxId}, _Sender, SD0=#vnode_state{prepared_key=PreparedKey
+handle_command({abort, TxId}, _Sender, SD0=#vnode_state{prepared_key=PreparedKey,
                                                           prepared_tx=PreparedTx}) ->
     [{TxId, {_PreparedTime, Keys}}] = ets:lookup(PreparedTx, TxId),
     clean_prepared(PreparedKey, PreparedTx, Keys, TxId),
@@ -252,7 +250,8 @@ check_conflicting_prepared(Keys, PreparedKeys)->
                                             Acc;
                                         false ->
                                             Acc ++ [TxId]
-                                    end, List, FilteredTxs)
+                                    end
+                                end, List, FilteredTxs)
                 end, [], Keys).
 
 clean_prepared(PreparedKey, PreparedTx, Keys, TxId) ->
@@ -265,14 +264,14 @@ clean_prepared(PreparedKey, PreparedTx, Keys, TxId) ->
                     true = ets:insert(PreparedKey, {Key, Orddict})
                   end, Keys).
 
-handle_txs_pendings(TxId, State = #vnode_state{tx_pending_for_commit=TxPendingForCommit
+handle_txs_pendings(TxId, State = #vnode_state{tx_pending_for_commit=TxPendingForCommit,
                                                n_to_notify_tx=NToNotifyTx,
-                                               pending_certification=PendingCertification) ->
+                                               pending_certification=PendingCertification}) ->
     case ets:lookup(TxPendingForCommit, TxId) of
         [] ->
             ok;
         PendingList ->
-            lists:foreach(fun({TxId, Elem}) ->
+            lists:foreach(fun({_TxId, Elem}) ->
                             [{Elem, N0}] = ets:lookup(NToNotifyTx, Elem),
                             case N0 of
                                 1 ->
@@ -285,7 +284,7 @@ handle_txs_pendings(TxId, State = #vnode_state{tx_pending_for_commit=TxPendingFo
                                     _ ->
                                         case do_prepare(Keys, Elem, SnapshotTime, From, State) of
                                             {reply, Reply, _State} ->
-                                                gen_fsm:reply(From, Reply};
+                                                gen_fsm:reply(From, Reply);
                                             {noreply, _State} ->
                                                 ok
                                         end
@@ -298,26 +297,29 @@ handle_txs_pendings(TxId, State = #vnode_state{tx_pending_for_commit=TxPendingFo
     true = ets:delete(TxPendingForCommit, TxId).
 
 handle_pending_reads(TxId, State = #vnode_state{pending_reads=PendingReads,
-                                                n_to_read=NToRead}) ->
+                                                n_to_read=NToRead,
+                                                backend=Backend}) ->
     case ets:lookup(PendingReads, TxId) of
         [] ->
-            ok;
+            true = ets:delete(PendingReads, TxId),
+            State;
         PendingList ->
-            lists:foreach(fun(Element) ->
+            true = ets:delete(PendingReads, TxId),
+            lists:foldl(fun(Element, Acc0) ->
                             {_TxId, {ReqId, Key, SnapshotTime, Sender}} = Element,
                             [{ReqId, N0}] = ets:lookup(NToRead, ReqId),
                             case N0 of
                                 1 ->
                                     true = ets:delete(NToRead, ReqId),
-                                    {Reply, UpState} = Backend:get(Key, SnapshotTime, State),
-                                    riak_core_vnode:reply(Sender, Reply);
+                                    {Reply, Acc} = Backend:get(Key, SnapshotTime, Acc0),
+                                    riak_core_vnode:reply(Sender, Reply),
+                                    Acc;
                                 _ ->
-                                    true = ets:insert(NToRead, {Fsm, N0 - 1})
+                                    true = ets:insert(NToRead, {ReqId, N0 - 1}),
+                                    Acc0
                             end
-                          end, PendingList)
-    end,
-    true = ets:delete(PendingReads, TxId),
-    UpState.
+                        end, State, PendingList)
+    end.
 
 get_txs_to_wait_for(SnapshotTime, Tuples, Clocks) ->
     List = lists:takewhile(fun({PreparedTime, _TxId}) ->
@@ -349,9 +351,9 @@ do_prepare(Keys0, TxId, SnapshotTime, From, State0 = #vnode_state{prepared_key=P
                                     case ets:lookup(PreparedKey, Key) of
                                         [] ->
                                             Dict0 = orddict:new(),
-                                            Dict = orddict:store(PrepareTime, TxId);
+                                            Dict = orddict:store(PrepareTime, TxId, Dict0);
                                         [{Key, Dict0}] ->
-                                            Dict = orddict:store(PrepareTime, TxId)
+                                            Dict = orddict:store(PrepareTime, TxId, Dict0)
                                     end,
                                     true = ets:insert(PreparedKey, {Key, Dict})
                                   end, Keys),
@@ -362,22 +364,18 @@ do_prepare(Keys0, TxId, SnapshotTime, From, State0 = #vnode_state{prepared_key=P
                                   end, List),
                     true = ets:insert(NToNotifyTx, {TxId, length(List)}),
                     true = ets:insert(PendingCertification, {TxId, {Keys0, SnapshotTime, From}}),
-                    {noreply, State}
+                    {noreply, State0}
             end;
         false ->
-            {reply, abort, State}
+            {reply, abort, State0}
     end.
 
-do_localcommit(Updates, TxId, SnapshotTime, Client, SD0=#vnode_state{committed_write_set=CommittedWriteSet0,
-                                                                                              backend=Backend,
-                                                                                              prepared_key=PreparedKey,
-                                                                                              prepared_tx=PreparedTx,
-                                                                                              committed_key=CommittedKey}) ->
-    case do_prepare(Updates, TxId, SnapshotTime, {localcommit, Client}, SD) of
-        {reply, Reply, SD1} ->
+do_localcommit(Updates, TxId, SnapshotTime, Client, SD0) ->
+    case do_prepare(Updates, TxId, SnapshotTime, {localcommit, Client}, SD0) of
+        {reply, {prepared, PrepareTime}, SD1} ->
             case do_commit(Updates, TxId, PrepareTime, SD1) of
                 {reply, committed, SD2} ->
-                    riak_core_vnode:reply(Client, {ok, {TxId, CommitTime}});
+                    riak_core_vnode:reply(Client, {ok, {TxId, PrepareTime}});
                 {reply, {error, _Reason}, SD2} ->
                     riak_core_vnode:reply(Client, {aborted, TxId})
             end;
@@ -407,8 +405,8 @@ do_commit(Updates, TxId, CommitTime, SD0=#vnode_state{committed_write_set=Commit
             CommittedWriteSet = orddict:store(CommitTime, Keys, CommittedWriteSet0),
             clean_prepared(PreparedKey, PreparedTx, Keys, TxId),
             handle_txs_pendings(TxId, SD),
-            handle_pendings_reads(TxId, SD),
-            {reply, committed, SD#vnode_state{committed_write_set=CommittedWriteSet};
+            handle_pending_reads(TxId, SD),
+            {reply, committed, SD#vnode_state{committed_write_set=CommittedWriteSet}};
         {{error, Reason}, SD} ->
             {reply, {error, Reason}, SD}
-    end;
+    end.

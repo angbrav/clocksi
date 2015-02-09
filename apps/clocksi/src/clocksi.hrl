@@ -2,6 +2,7 @@
 -define(CLOCKS_IMPLEMENTATION, physical_clocks).
 -define(BACKEND, ets_backend).
 -define(BUCKET, clock_si).
+-define(CLOCKSI_MASTER, clocksi_master_vnode).
 
 -record(vnode_state, {partition,
                       clocks,
@@ -12,7 +13,7 @@
                       n_to_notify_tx,
                       pending_reads,
                       n_to_read,
-                      preparedTx,
+                      prepared_tx,
                       pending_certification,
                       committed_key,
                       committed_write_set}).

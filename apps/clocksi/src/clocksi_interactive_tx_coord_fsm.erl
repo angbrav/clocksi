@@ -98,12 +98,12 @@ execute_op({OpType, Args}, Sender,
                             UpdatedPartitions = UpdatedPartitions0 ++ IndexNode,
                             {reply, ok, execute_op, SD0#coord_state{updated_partitions=UpdatedPartitions,
                                                                     updates_buffer=UpdatesBuffer,
-                                                                    partitions_buffer_keys=PartitionsBufferKeys0,
-                                                                    partitions_buffer_values=PartitionsBufferValues0}};
+                                                                    partitions_buffer_keys=PartitionsBufferKeys,
+                                                                    partitions_buffer_values=PartitionsBufferValues}};
                         true->
                             {reply, ok, execute_op, SD0#coord_state{updates_buffer=UpdatesBuffer,
-                                                                    partitions_buffer_keys=PartitionsBufferKeys0,
-                                                                    partitions_buffer_values=PartitionsBufferValues0}}
+                                                                    partitions_buffer_keys=PartitionsBufferKeys,
+                                                                    partitions_buffer_values=PartitionsBufferValues}}
                     end
             end
     end.
@@ -222,6 +222,7 @@ terminate(_Reason, _SN, _SD) ->
 reply_to_client(SD0=#coord_state{from=From, tx_id=TxId, state=TxState, clocks=Clocks}) ->
     case From of
         undefined ->
+            SD=SD0,
             ok;
         _ ->
             Reply = case TxState of

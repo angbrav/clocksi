@@ -7,7 +7,7 @@
          put/3,
          get/3]).
 
-start(S0) ->
+start(S0=#vnode_state{partition=Partition}) ->
     Store = ets:new(list_to_atom(atom_to_list(ets_backend) ++ integer_to_list(Partition)), [set]),
     S0#vnode_state{store=Store}. 
 
@@ -16,7 +16,7 @@ put({Key, Value}, Version, SD0=#vnode_state{store=Store}) ->
         [] ->
             Orddict0 = orddict:new(),
             Orddict1 = orddict:store(Version, Value, Orddict0);
-        [{Key, Orddict0] -> 
+        [{Key, Orddict0}] -> 
             Orddict1 = orddict:store(Version, Value, Orddict0)
     end,
     case ets:insert(Store, {Key, Orddict1}) of
@@ -26,7 +26,7 @@ put({Key, Value}, Version, SD0=#vnode_state{store=Store}) ->
             {{error, Error}, SD0}
     end;
 
-put([Next|Rest], Version, SD0=#vnode_state{store=Store}) ->
+put([Next|Rest], Version, SD0) ->
     case put(Next, Version, SD0) of
         {ok, SD} ->
             put(Rest, Version, SD);
@@ -37,8 +37,8 @@ put([Next|Rest], Version, SD0=#vnode_state{store=Store}) ->
 put([], _Version, _SD0) ->
     ok.
 
-get(Key, Version SD0=#vnode_state{store=Store}) ->
-    case ets:lookup(Store, Key) pf
+get(Key, Version, SD0=#vnode_state{store=Store}) ->
+    case ets:lookup(Store, Key) of
         [] ->
             {{error, key_not_found}, SD0};
         [{Key, Orddict}] ->
