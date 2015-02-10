@@ -117,9 +117,6 @@ init([Partition]) ->
     CommittedKey = ets:new(list_to_atom(atom_to_list(committed_key) ++
                                           integer_to_list(Partition)),
                           [set]),
-    CommittedWriteSet = ets:new(list_to_atom(atom_to_list(committed_write_set)
-                                           ++ integer_to_list(Partition)),
-                                [ordered_set]),
 
     SD0 = #vnode_state{partition=Partition,
                        clocks= Clocks,
@@ -132,11 +129,14 @@ init([Partition]) ->
                        prepared_tx=PreparedTx,
                        pending_certification=PendingCertification,
                        committed_key=CommittedKey,
-                       committed_write_set=CommittedWriteSet},
+                       committed_write_set=[]},
 
     SD = Backend:start(SD0),
     {ok, SD}.
-                
+               
+handle_command(ping, _Sender, SD0) ->
+    {reply, pong, SD0};
+ 
 %% @doc starts a read_fsm to handle a read operation.
 handle_command({read_data_item, Key, SnapshotTime}, Sender, SD0=#vnode_state{clocks=Clocks,
                                                                              backend=Backend,
@@ -145,19 +145,23 @@ handle_command({read_data_item, Key, SnapshotTime}, Sender, SD0=#vnode_state{clo
                                                                              n_to_read=NToRead}) ->
     ReqId = clocksi:mk_reqid(),
     SD = Clocks:wait_until_safe(SnapshotTime, SD0),
-    [{Key, Orddict0}] = ets:lookup(PreparedKey, Key),
-    case get_txs_to_wait_for(SnapshotTime, Orddict0, Clocks) of
+    case ets:lookup(PreparedKey, Key) of
+        [{Key, Orddict0}] ->
+            case get_txs_to_wait_for(SnapshotTime, Orddict0, Clocks) of
+                [] ->
+                    {Reply, SD1} = Backend:get(Key, SnapshotTime, SD),
+                    {reply, Reply, SD1};
+                ListTxs ->
+                    lists:foreach(fun(TxId) ->
+                                    true = ets:insert(PendingReads, {TxId, {ReqId, Key, SnapshotTime, Sender}})
+                                  end, ListTxs),
+                    true = ets:insert(NToRead, {ReqId, length(ListTxs)}),
+                    {noreply, SD}
+            end;
         [] ->
             {Reply, SD1} = Backend:get(Key, SnapshotTime, SD),
-            {reply, Reply, SD1};
-        ListTxs ->
-            lists:foreach(fun(TxId) ->
-                            true = ets:insert(PendingReads, {TxId, {ReqId, Key, SnapshotTime, Sender}})
-                          end, ListTxs),
-            true = ets:insert(NToRead, {ReqId, length(ListTxs)}),
-            {noreply, SD}
+            {reply, Reply, SD1}
     end;
-
 
 handle_command({prepare, Keys, TxId, SnapshotTime}, Sender, SD0=#vnode_state{clocks=Clocks}) ->
     SD = Clocks:wait_until_safe(SnapshotTime, SD0),
@@ -242,16 +246,20 @@ concurrent(SnapshotTime, Orddict, Clocks) ->
 
 check_conflicting_prepared(Keys, PreparedKeys)->
     lists:foldl(fun(Key, List)->
-                    [{Key, Orddict}] = ets:lookup(PreparedKeys, Key),
-                    FilteredTxs = [TxId || {_PT, TxId} <- Orddict],
-                    lists:foldl(fun(TxId, Acc) ->
-                                    case lists:member(TxId, Acc) of
-                                        true ->
-                                            Acc;
-                                        false ->
-                                            Acc ++ [TxId]
-                                    end
-                                end, List, FilteredTxs)
+                    case ets:lookup(PreparedKeys, Key) of
+                        [] ->
+                            List;
+                        [{Key, Orddict}] ->
+                            FilteredTxs = [TxId || {_PT, TxId} <- Orddict],
+                            lists:foldl(fun(TxId, Acc) ->
+                                            case lists:member(TxId, Acc) of
+                                                true ->
+                                                    Acc;
+                                                false ->
+                                                    Acc ++ [TxId]
+                                            end
+                                        end, List, FilteredTxs)
+                        end
                 end, [], Keys).
 
 clean_prepared(PreparedKey, PreparedTx, Keys, TxId) ->
@@ -322,9 +330,11 @@ handle_pending_reads(TxId, State = #vnode_state{pending_reads=PendingReads,
     end.
 
 get_txs_to_wait_for(SnapshotTime, Tuples, Clocks) ->
+    lager:info("It gets here"),
     List = lists:takewhile(fun({PreparedTime, _TxId}) ->
                             Clocks:compare_g(SnapshotTime, PreparedTime)
                            end, Tuples),
+    lager:info("It gets here, result list: ~p", [List]),
     [TxId || {_PT, TxId} <- List]. 
 
 do_prepare(Keys0, TxId, SnapshotTime, From, State0 = #vnode_state{prepared_key=PreparedKey,
@@ -375,7 +385,7 @@ do_localcommit(Updates, TxId, SnapshotTime, Client, SD0) ->
         {reply, {prepared, PrepareTime}, SD1} ->
             case do_commit(Updates, TxId, PrepareTime, SD1) of
                 {reply, committed, SD2} ->
-                    riak_core_vnode:reply(Client, {ok, {TxId, PrepareTime}});
+                    Client ! {ok, {TxId, PrepareTime}};
                 {reply, {error, _Reason}, SD2} ->
                     riak_core_vnode:reply(Client, {aborted, TxId})
             end;

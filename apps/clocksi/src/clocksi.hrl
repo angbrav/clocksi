@@ -1,8 +1,8 @@
 -define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
--define(CLOCKS_IMPLEMENTATION, physical_clocks).
+-define(CLOCKS_IMPLEMENTATION, physical_clock).
 -define(BACKEND, ets_backend).
 -define(BUCKET, clock_si).
--define(CLOCKSI_MASTER, clocksi_master_vnode).
+-define(CLOCKSI_MASTER, clocksi_vnode_master).
 
 -record(vnode_state, {partition,
                       clocks,

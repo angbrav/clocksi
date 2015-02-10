@@ -44,15 +44,24 @@ start_tx() ->
     end.
 
 read({_UId, CoordFsmPid}, Key) ->
-    gen_fsm:sync_send_event(CoordFsmPid, {read, Key}).
+    gen_fsm:send_event(CoordFsmPid, {read, Key, self()}),
+    wait_for_reply().
 
 update({_UId, CoordFsmPid}, Key, Value) ->
-    gen_fsm:sync_send_event(CoordFsmPid, {update, {Key, Value}}).
+    gen_fsm:send_event(CoordFsmPid, {update, {Key, Value}, self()}),
+    wait_for_reply().
 
 commit({_Uid, CoordFsmPid})->
-    gen_fsm:sync_send_event(CoordFsmPid, commit).
+    gen_fsm:send_event(CoordFsmPid, {commit, [], self()}),
+    wait_for_reply().
 
 get_responsible(Key)->
     HashedKey = riak_core_util:chash_key({?BUCKET, term_to_binary(Key)}),
     PreflistANN = riak_core_apl:get_primary_apl(HashedKey, 1, clocksi),
     [IndexNode || {IndexNode, _Type} <- PreflistANN].
+
+wait_for_reply() ->
+    receive
+        Whatever ->
+            Whatever
+    end.

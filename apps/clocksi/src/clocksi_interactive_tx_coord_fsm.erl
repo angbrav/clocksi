@@ -12,7 +12,7 @@
          handle_sync_event/4, terminate/3]).
 
 %% States
--export([execute_op/3, prepare/2, read/3,
+-export([execute_op/2, prepare/2, read/2,
          receive_prepared/3, committing/2, receive_committed/3,  abort/2]).
 
 %%%===================================================================
@@ -44,7 +44,7 @@ init([From, ClientClock]) ->
 %% @doc Contact the leader computed in the prepare state for it to execute the
 %%      operation, wait for it to finish (synchronous) and go to the prepareOP
 %%       to execute the next operation.
-execute_op({OpType, Args}, Sender,
+execute_op({OpType, Args, Sender},
            SD0=#coord_state{tx_id=_TxId,
                             snapshot_time=SnapshotTime,
                             from=_From,
@@ -65,11 +65,15 @@ execute_op({OpType, Args}, Sender,
                 _ ->
                     case dict:find(Key, UpdatesBuffer0) of
                         {ok, Value} ->
-                            {reply, {ok, Value}, execute_op, SD0};
+                            Sender ! {ok, Value},
+                            {next_state, execute_op, SD0};
+                            %{reply, {ok, Value}, execute_op, SD0};
                         error ->
                             case dict:find(Key, ReadsBuffer0) of
                                 {ok, Value} ->
-                                    {reply, {ok, Value}, execute_op, SD0};
+                                    Sender ! {ok, Value},
+                                    {next_state, execute_op, SD0};
+                                    %{reply, {ok, Value}, execute_op, SD0};
                                 error ->
                                     clocksi_vnode:read_data_item(IndexNode, Key, SnapshotTime),
                                     {next_state, read, SD0#coord_state{from=Sender, key=Key}}
@@ -96,27 +100,33 @@ execute_op({OpType, Args}, Sender,
                     case lists:member(hd(IndexNode), UpdatedPartitions0) of
                         false ->
                             UpdatedPartitions = UpdatedPartitions0 ++ IndexNode,
-                            {reply, ok, execute_op, SD0#coord_state{updated_partitions=UpdatedPartitions,
+                            Sender ! ok,
+                            %{reply, ok, execute_op, SD0#coord_state{updated_partitions=UpdatedPartitions,
+                            {next_state, execute_op, SD0#coord_state{updated_partitions=UpdatedPartitions,
                                                                     updates_buffer=UpdatesBuffer,
                                                                     partitions_buffer_keys=PartitionsBufferKeys,
                                                                     partitions_buffer_values=PartitionsBufferValues}};
                         true->
-                            {reply, ok, execute_op, SD0#coord_state{updates_buffer=UpdatesBuffer,
+                            Sender ! ok,
+                            %{reply, ok, execute_op, SD0#coord_state{updates_buffer=UpdatesBuffer,
+                            {next_state, execute_op, SD0#coord_state{updates_buffer=UpdatesBuffer,
                                                                     partitions_buffer_keys=PartitionsBufferKeys,
                                                                     partitions_buffer_values=PartitionsBufferValues}}
                     end
             end
     end.
 
-read({ok, Value}, _Sender, SD0=#coord_state{from=From,
+read({ok, Value}, SD0=#coord_state{from=From,
                                reads_buffer=ReadsBuffer0,
                                key=Key}) ->
-    gen_fsm:reply(From, {ok, Value}),
+    From ! {ok, Value},
+    %gen_fsm:reply(From, {ok, Value}),
     ReadsBuffer = dict:store(Key, Value, ReadsBuffer0),
     {next_state, execute_op, SD0#coord_state{reads_buffer=ReadsBuffer}};
 
-read({error, Reason}, _Sender, SD0=#coord_state{from=From}) ->
-    gen_fsm:reply(From, {error, Reason}),
+read({error, Reason}, SD0=#coord_state{from=From}) ->
+    From ! {error, Reason},
+    %gen_fsm:reply(From, {error, Reason}),
     {stop, normal, SD0}.
 
 %% @doc a message from a client wanting to start committing the tx.
@@ -130,10 +140,11 @@ prepare(timeout, SD0=#coord_state{snapshot_time=SnapshotTime,
                                   partitions_buffer_keys=PartitionsBufferKeys}) ->
     case length(UpdatedPartitions) of
         0 ->
-            SD = reply_to_client(SD0),
-            {stop, normal, SD#coord_state{state=committed, commit_time=SnapshotTime}};
+            
+            SD = reply_to_client(SD0#coord_state{state=commited, commit_time=SnapshotTime}),
+            {stop, normal, SD};
         1 ->
-            clocksi_vnode:local_commit(hd(UpdatedPartitions), UpdatesBuffer, TxId, SnapshotTime, From),
+            clocksi_vnode:local_commit(hd(UpdatedPartitions), dict:to_list(UpdatesBuffer), TxId, SnapshotTime, From),
             {stop, normal, SD0#coord_state{state=committed}};
         _ ->
             lists:foreach(fun(IndexNode) ->
@@ -171,8 +182,8 @@ committing(tiemout, SD0=#coord_state{tx_id=TxId,
                     Updates = dict:fetch(IndexNode, PartitionsBufferValues),
                     clocksi_vnode:commit([IndexNode], dict:to_list(Updates), TxId, CommitTime)
                   end, UpdatedPartitions),
-    SD = reply_to_client(SD0),
-    {next_state, receive_committed, SD#coord_state{num_ack=NumAck, state=committing}}.
+    SD = reply_to_client(SD0#coord_state{state=committed}),
+    {next_state, receive_committed, SD#coord_state{num_ack=NumAck}}.
 
 %% @doc the fsm waits for acks indicating that each partition has successfully
 %%	committed the tx and finishes operation.
@@ -192,14 +203,14 @@ receive_committed(committed, _Sender, SD0=#coord_state{num_ack=NumAck}) ->
 abort(timeout, SD0=#coord_state{tx_id=TxId,
                                 updated_partitions=UpdatedPartitions}) ->
     clocksi_vnode:abort(UpdatedPartitions, TxId),
-    SD = reply_to_client(SD0),
-    {stop, normal, SD#coord_state{state=aborted}};
+    SD = reply_to_client(SD0#coord_state{state=aborted}),
+    {stop, normal, SD};
 
 abort(abort, SD0=#coord_state{tx_id=TxId,
                               updated_partitions=UpdatedPartitions}) ->
     clocksi_vnode:abort(UpdatedPartitions, TxId),
-    SD = reply_to_client(SD0),
-    {stop, normal, SD#coord_state{state=aborted}}.
+    SD = reply_to_client(SD0#coord_state{state=aborted}),
+    {stop, normal, SD}.
 
 %% =============================================================================
 
@@ -219,11 +230,10 @@ terminate(_Reason, _SN, _SD) ->
 
 %% @doc when the transaction has committed or aborted,
 %%       a reply is sent to the client that started the transaction.
-reply_to_client(SD0=#coord_state{from=From, tx_id=TxId, state=TxState, clocks=Clocks}) ->
+reply_to_client(SD0=#coord_state{tx_id=TxId, clocks=Clocks, state=TxState, from=From}) ->
     case From of
         undefined ->
-            SD=SD0,
-            ok;
+            SD0;
         _ ->
             Reply = case TxState of
                         committed ->
@@ -236,6 +246,7 @@ reply_to_client(SD0=#coord_state{from=From, tx_id=TxId, state=TxState, clocks=Cl
                             SD = SD0,
                             {error, TxId, Reason}
                     end,
-            gen_fsm:reply(From, Reply)
-    end,
-    SD.
+            From ! Reply,
+            SD
+            %gen_fsm:reply(From, Reply)
+    end.
