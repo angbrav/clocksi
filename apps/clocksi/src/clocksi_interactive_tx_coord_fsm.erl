@@ -13,7 +13,7 @@
 
 %% States
 -export([execute_op/2, prepare/2, read/2,
-         receive_prepared/3, committing/2, receive_committed/3,  abort/2]).
+         receive_prepared/2, committing/2, receive_committed/2,  abort/2]).
 
 %%%===================================================================
 %%% API
@@ -39,6 +39,7 @@ init([From, ClientClock]) ->
     TxId = {UId, self()},
     From ! {ok, TxId},
     {ok, execute_op, SD1#coord_state{tx_id=TxId,
+                                     prepare_time=Clocks:init_clock(),
                                      snapshot_time=SnapshotTime}}.
 
 %% @doc Contact the leader computed in the prepare state for it to execute the
@@ -141,7 +142,7 @@ prepare(timeout, SD0=#coord_state{snapshot_time=SnapshotTime,
     case length(UpdatedPartitions) of
         0 ->
             
-            SD = reply_to_client(SD0#coord_state{state=commited, commit_time=SnapshotTime}),
+            SD = reply_to_client(SD0#coord_state{state=committed, commit_time=SnapshotTime}),
             {stop, normal, SD};
         1 ->
             clocksi_vnode:local_commit(hd(UpdatedPartitions), dict:to_list(UpdatesBuffer), TxId, SnapshotTime, From),
@@ -158,9 +159,10 @@ prepare(timeout, SD0=#coord_state{snapshot_time=SnapshotTime,
 %% @doc in this state, the fsm waits for prepare_time from each updated
 %%      partitions in order to compute the final tx timestamp (the maximum
 %%      of the received prepare_time).
-receive_prepared({prepared, ReceivedPrepareTime}, _Sender, SD0=#coord_state{num_ack= NumAck,
-                                                                            prepare_time=PrepareTime}) ->
-    MaxPrepareTime = max(PrepareTime, ReceivedPrepareTime),
+receive_prepared({prepared, ReceivedPrepareTime}, SD0=#coord_state{num_ack= NumAck,
+                                                                   clocks=Clocks,
+                                                                   prepare_time=PrepareTime}) ->
+    MaxPrepareTime = Clocks:max_time(PrepareTime, ReceivedPrepareTime),
     case NumAck of
         1 ->
             {next_state, committing, SD0#coord_state{prepare_time=MaxPrepareTime,commit_time=MaxPrepareTime, state=committing}, 0};
@@ -168,12 +170,12 @@ receive_prepared({prepared, ReceivedPrepareTime}, _Sender, SD0=#coord_state{num_
             {next_state, receive_prepared, SD0#coord_state{num_ack= NumAck-1, prepare_time=MaxPrepareTime}}
     end;
 
-receive_prepared(abort, _Sender, SD0) ->
+receive_prepared(abort, SD0) ->
     {next_state, abort, SD0, 0}.
 
 %% @doc after receiving all prepare_times, send the commit message to all
 %%       updated partitions, and go to the "receive_committed" state.
-committing(tiemout, SD0=#coord_state{tx_id=TxId,
+committing(timeout, SD0=#coord_state{tx_id=TxId,
                                      updated_partitions=UpdatedPartitions,
                                      partitions_buffer_values=PartitionsBufferValues,
                                      commit_time=CommitTime}) ->
@@ -190,7 +192,7 @@ committing(tiemout, SD0=#coord_state{tx_id=TxId,
 %%      Should we retry sending the committed message if we don't receive a
 %%      reply from every partition?
 %%      What delivery guarantees does sending messages provide?
-receive_committed(committed, _Sender, SD0=#coord_state{num_ack=NumAck}) ->
+receive_committed(committed, SD0=#coord_state{num_ack=NumAck}) ->
     case NumAck of
         1 ->
             {stop, normal, SD0#coord_state{state=committed}};

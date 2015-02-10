@@ -7,6 +7,8 @@
          get_commit_client_clock/1,
          get_prepare_time/1,
          wait_until_safe/2,
+         max_time/2,
+         init_clock/0,
          compare_g/2,
          compare_ge/2]).
 
@@ -35,6 +37,12 @@ wait_until_safe(Threshold, SD0) ->
         false ->
             SD0
     end.
+
+max_time(Clock1, Clock2) ->
+    max(Clock1, Clock2).
+
+init_clock() ->
+    0.
 
 compare_g(Time1, Time2) ->
     Time1 > Time2.

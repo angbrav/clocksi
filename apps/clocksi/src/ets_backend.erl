@@ -16,7 +16,7 @@ put({Key, Value}, Version, SD0=#vnode_state{store=Store}) ->
         [] ->
             Orddict0 = orddict:new(),
             Orddict1 = orddict:store(Version, Value, Orddict0);
-        [{Key, Orddict0}] -> 
+        [{Key, Orddict0}] ->
             Orddict1 = orddict:store(Version, Value, Orddict0)
     end,
     case ets:insert(Store, {Key, Orddict1}) of

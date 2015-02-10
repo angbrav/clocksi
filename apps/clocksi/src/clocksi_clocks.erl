@@ -7,6 +7,10 @@
 -callback get_prepare_time(State :: term()) -> {PrepareTime :: term(), UptState :: term()}.
 
 -callback wait_until_safe(Threshold :: term(), State :: term()) -> UptState :: term().
+    
+-callback max_time(Clock1 :: term(), Clock2 :: term()) -> MaxClock :: term().
+
+-callback init_clock() -> InitialClock :: term().
 
 -callback compare_g(Time1 :: term(), Time2 :: term()) -> Result :: boolean().
 

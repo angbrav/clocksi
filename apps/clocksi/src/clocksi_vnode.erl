@@ -172,6 +172,7 @@ handle_command({local_commit, Updates, TxId, SnapshotTime, Client}, _Sender, SD0
     do_localcommit(Updates, TxId, SnapshotTime, Client, SD);
 
 handle_command({commit, Updates, TxId, CommitTime}, _Sender, SD0) ->
+    lager:info("Distributed commit"),
     do_commit(Updates, TxId, CommitTime, SD0);
 
 handle_command({abort, TxId}, _Sender, SD0=#vnode_state{prepared_key=PreparedKey,
@@ -330,11 +331,9 @@ handle_pending_reads(TxId, State = #vnode_state{pending_reads=PendingReads,
     end.
 
 get_txs_to_wait_for(SnapshotTime, Tuples, Clocks) ->
-    lager:info("It gets here"),
     List = lists:takewhile(fun({PreparedTime, _TxId}) ->
                             Clocks:compare_g(SnapshotTime, PreparedTime)
                            end, Tuples),
-    lager:info("It gets here, result list: ~p", [List]),
     [TxId || {_PT, TxId} <- List]. 
 
 do_prepare(Keys0, TxId, SnapshotTime, From, State0 = #vnode_state{prepared_key=PreparedKey,
