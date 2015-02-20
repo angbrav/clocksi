@@ -172,7 +172,6 @@ handle_command({local_commit, Updates, TxId, SnapshotTime, Client}, _Sender, SD0
     do_localcommit(Updates, TxId, SnapshotTime, Client, SD);
 
 handle_command({commit, Updates, TxId, CommitTime}, _Sender, SD0) ->
-    lager:info("Distributed commit"),
     do_commit(Updates, TxId, CommitTime, SD0);
 
 handle_command({abort, TxId}, _Sender, SD0=#vnode_state{prepared_key=PreparedKey,
