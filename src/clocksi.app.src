@@ -1,0 +1,16 @@
+%% -*- erlang -*-
+{application, clocksi,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  riak_pb,
+                  riak_api,
+                  riak_core
+                 ]},
+  {mod, { clocksi_app, []}},
+  {env, []}
+ ]}.
