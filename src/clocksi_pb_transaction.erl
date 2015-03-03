@@ -26,7 +26,6 @@
 
 -behaviour(riak_api_pb_service).
 
-%-include_lib("../../../deps/riak_pb/include/clocksi_pb.hrl").
 -include_lib("riak_pb/include/clocksi_pb.hrl").
 
 -export([init/0,
@@ -41,11 +40,15 @@
 %% @doc init/0 callback. Returns the service internal start
 %% state.
 init() ->
+    %lager:info("initing"),
     #state{}.
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
+    %lager:info("Decoding message: ~w ~w ~n",[Code, Bin]),
     Msg = riak_pb_codec:decode(Code, Bin),
+    %lager:info("Before~n"),
+    %lager:info("Decoded ~w~n", [Msg]),
     case Msg of
         #fpbstarttxreq{} ->
             {ok, Msg, {"clocksi.starttx", <<>>}};
@@ -59,27 +62,40 @@ decode(Code, Bin) ->
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
+    %lager:info("Encoding ~w ~n", [Message]),
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#fpbstarttxreq{time=Time}, State) ->
-    TxId = clocksi:startTx(Time), 
-    {reply, #fpbstarttxresp{txid=TxId}, State};
+%% Not really using the clock.
+process(#fpbstarttxreq{time=_Time}, State) ->
+    %lager:info("Start tx~n"),
+    {ok, TxId} = clocksi:start_tx(), 
+    {Counter, PID} = TxId,
+    {reply, #fpbstarttxresp{txid=#txid{uuid=Counter, pid=term_to_binary(PID)}}, State};
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#fpbupdatereq{id=Id, key=Key, value=Value}, State) ->
-    Result = clocksi:update(Id, Key, Value), 
-    {reply, #fpbupdateresp{result=Result}, State};
+process(#fpbupdatereq{txid=ByteTxId, key=Key, value=Value}, State) ->
+    %lager:info("Update tx~n"),
+    BytePID = ByteTxId#txid.pid,
+    TxId = {ByteTxId#txid.uuid, binary_to_term(BytePID)},
+    Result = clocksi:update(TxId, Key, Value), 
+    {reply, #fpbupdateresp{result=term_to_binary(Result)}, State};
 
 %% @doc process/2 callback. Handles an incoming request message.
 %% @todo accept different types of counters.
-process(#fpbreadreq{id=Id, key=Key}, State) ->
-    Result = clocksi:read(Id, Key),
-    {reply, #fpbreadresp{result = Result}, State};
+process(#fpbreadreq{txid=ByteTxId, key=Key}, State) ->
+    %lager:info("Read tx~n"),
+    BytePID = ByteTxId#txid.pid,
+    TxId = {ByteTxId#txid.uuid, binary_to_term(BytePID)},
+    Result = clocksi:read(TxId, Key),
+    {reply, #fpbreadresp{result = term_to_binary(Result)}, State};
 
-process(#fpbcommittxreq{id=Id}, State) ->
-    Result = clocksi:commitTx(Id),
-    {reply, #fpbcommittxresp{result = Result}, State}.
+process(#fpbcommittxreq{txid=ByteTxId}, State) ->
+    %lager:info("Commit tx~n"),
+    BytePID = ByteTxId#txid.pid,
+    TxId = {ByteTxId#txid.uuid, binary_to_term(BytePID)},
+    Result = clocksi:commit(TxId),
+    {reply, #fpbcommittxresp{result = term_to_binary(Result)}, State}.
 
 %% @doc process_stream/3 callback. This service does not create any
 %% streaming responses and so ignores all incoming messages.

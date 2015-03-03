@@ -6,7 +6,7 @@
 -export([start/2, stop/1]).
 
 %% PB Services
--define(SERVICES, [{clocksi_pb_transaction, 94, 101}]).
+-define(SERVICES, [{clocksi_pb_transaction, 94, 102}]).
 %% ===================================================================
 %% Application callbacks
 %% ===================================================================
@@ -19,7 +19,6 @@ start(_StartType, _StartArgs) ->
             ok = riak_core_node_watcher_events:add_guarded_handler(clocksi_node_event_handler, []),
             ok = riak_core_node_watcher:service_up(clocksi, self()),
             ok = riak_api_pb_service:register(?SERVICES),
-            lager:info("Resistered."),
             {ok, Pid};
         {error, Reason} ->
             {error, Reason}

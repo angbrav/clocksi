@@ -330,11 +330,10 @@ handle_pending_reads(TxId, State = #vnode_state{pending_reads=PendingReads,
     end.
 
 get_txs_to_wait_for(SnapshotTime, Tuples, Clocks) ->
-    lager:info("It gets here"),
     List = lists:takewhile(fun({PreparedTime, _TxId}) ->
                             Clocks:compare_g(SnapshotTime, PreparedTime)
                            end, Tuples),
-    lager:info("It gets here, result list: ~p", [List]),
+    %lager:info("It gets here, result list: ~p", [List]),
     [TxId || {_PT, TxId} <- List]. 
 
 do_prepare(Keys0, TxId, SnapshotTime, From, State0 = #vnode_state{prepared_key=PreparedKey,

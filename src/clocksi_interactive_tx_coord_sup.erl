@@ -33,7 +33,7 @@ start_fsm(Args) ->
 
 %% @doc Starts the coordinator of a ClockSI interactive transaction.
 init([]) ->
-    lager:info("Fucking lager"),
+    lager:info("Fucking lager aaaaaaaaa"),
     Worker = {clocksi_interactive_tx_coord_fsm,
               {clocksi_interactive_tx_coord_fsm, start_link, []},
               transient, 5000, worker, [clocksi_interactive_tx_coord_fsm]},

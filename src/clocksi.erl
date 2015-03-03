@@ -40,6 +40,7 @@ start_tx() ->
     {ok, _} = clocksi_interactive_tx_coord_sup:start_fsm([self()]),
     receive
         TxId ->
+            %lager:info("TxId ~w ~n", [TxId]),
             TxId
     end.
 

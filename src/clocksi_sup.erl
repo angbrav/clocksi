@@ -20,6 +20,7 @@ start_link() ->
 %% ===================================================================
 
 init(_Args) ->
+    lager:info("Start clocksi sup"),
     VMaster = { clocksi_vnode_master,
                   {riak_core_vnode_master, start_link, [clocksi_vnode]},
                   permanent, 5000, worker, [riak_core_vnode_master]},
